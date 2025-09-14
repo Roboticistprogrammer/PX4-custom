@@ -59,3 +59,10 @@ param set-default SENS_EN_GPSSIM 1  # Enables simulated GPS.
 param set SYS_HAS_MAG 1
 param set SDLOG_MODE 0
 param set SDLOG_PROFILE 2
+
+param set EKF2_MULTI_IMU = 0
+param set EKF2_MULTI_MAG = 0
+param set COM_OF_LOSS_T 60
+param set COM_OBL_RC_ACT 2
+
+
