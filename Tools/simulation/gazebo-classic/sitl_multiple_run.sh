@@ -24,6 +24,7 @@ function spawn_model() {
 	if [[ " ${SUPPORTED_MODELS[*]} " != *"$MODEL"* ]];
 	then
 		echo "ERROR: Currently only vehicle model $MODEL is not supported!"
+
 		echo "       Supported Models: [${SUPPORTED_MODELS[@]}]"
 		trap "cleanup" SIGINT SIGTERM EXIT
 		exit 1
@@ -65,7 +66,7 @@ then
 	exit 1
 fi
 
-while getopts n:m:w:s:t:l: option
+while getopts n:m:w:s:t:l:p: option
 do
 	case "${option}"
 	in
@@ -75,6 +76,8 @@ do
 		s) SCRIPT=${OPTARG};;
 		t) TARGET=${OPTARG};;
 		l) LABEL=_${OPTARG};;
+		p) POSE_MAP=${OPTARG};;
+
 	esac
 done
 
@@ -82,22 +85,29 @@ num_vehicles=${NUM_VEHICLES:=3}
 world=${WORLD:=empty}
 target=${TARGET:=px4_sitl_default}
 vehicle_model=${VEHICLE_MODEL:="iris"}
+
+pose_exists="false"
+if [[ -n "${POSE_MAP}" ]]; then
+  # Split the map into individual key-value pairs using a comma as the delimiter
+  IFS='|' read -ra pose_map <<< "$POSE_MAP"
+  pose_exists="true"
+fi
+ 
 export PX4_SIM_MODEL=gazebo-classic_${vehicle_model}
 
-echo ${SCRIPT}
+echo "${SCRIPT}"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 src_path="$SCRIPT_DIR/../../.."
 
 build_path=${src_path}/build/${target}
 mavlink_udp_port=14560
 mavlink_tcp_port=4560
-
 echo "killing running instances"
 pkill -x px4 || true
 
 sleep 1
 
-source ${src_path}/Tools/simulation/gazebo-classic/setup_gazebo.bash ${src_path} ${src_path}/build/${target}
+source "${src_path}"/Tools/simulation/gazebo-classic/setup_gazebo.bash "${src_path}" "${src_path}"/build/${target}
 
 # To use gazebo_ros ROS2 plugins
 if [[ -n "$ROS_VERSION" ]] && [ "$ROS_VERSION" == "2" ]; then
@@ -107,11 +117,11 @@ else
 fi
 
 echo "Starting gazebo"
-gzserver ${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${world}.world --verbose $ros_args &
+gzserver "${src_path}"/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${world}.world --verbose "$ros_args" &
 sleep 5
 
 n=0
-if [ -z ${SCRIPT} ]; then
+if [ -z "${SCRIPT}" ]; then
 	if [ $num_vehicles -gt 255 ]
 	then
 		echo "Tried spawning $num_vehicles vehicles. The maximum number of supported vehicles is 255"
@@ -119,17 +129,26 @@ if [ -z ${SCRIPT} ]; then
 	fi
 
 	while [ $n -lt $num_vehicles ]; do
-		spawn_model ${vehicle_model} $(($n + 1))
-		n=$(($n + 1))
+		instance=$(($n + 1))
+		if [[ "${pose_exists}" == "true" ]]; then
+			pose="${pose_map[$n]}"
+			if [[ -n "$pose" ]]; then
+				IFS=',' read -r x y <<< "$pose"
+				spawn_model ${vehicle_model} ${instance} "${x}" "${y}"
+			else
+				spawn_model ${vehicle_model} ${instance}
+			fi
+		else
+			spawn_model ${vehicle_model} ${instance}
+		fi 
+		n=${instance}
 	done
 else
 	IFS=,
 	for target in ${SCRIPT}; do
 		target="$(echo "$target" | tr -d ' ')" #Remove spaces
-		target_vehicle=$(echo $target | cut -f1 -d:)
-		target_number=$(echo $target | cut -f2 -d:)
-		target_x=$(echo $target | cut -f3 -d:)
-		target_y=$(echo $target | cut -f4 -d:)
+		target_vehicle=$(echo "$target" | cut -f1 -d:)
+		target_number=$(echo "$target" | cut -f2 -d:)
 
 		if [ $n -gt 255 ]
 		then
@@ -138,11 +157,24 @@ else
 		fi
 
 		m=0
-		while [ $m -lt ${target_number} ]; do
+		while [ $m -lt "${target_number}" ]; do
 			export PX4_SIM_MODEL=gazebo-classic_${target_vehicle}
-			spawn_model ${target_vehicle}${LABEL} $(($n + 1)) $target_x $target_y
+			instance=$(($n + 1))
+			# We can now specify a pose for each instance and if none is provided, we use default location
+			if [[ "${pose_exists}" == "true" ]]; then
+				echo $n
+				pose="${pose_map[$n]}"
+				if [[ -n "$pose" ]]; then
+					IFS=',' read -r x y <<< "$pose"
+					spawn_model "${target_vehicle}""${LABEL}" ${instance} "${x}" "${y}"
+				else
+					spawn_model "${target_vehicle}""${LABEL}" ${instance}
+				fi
+			else
+				spawn_model "${target_vehicle}""${LABEL}" ${instance}
+			fi 
+			n=${instance}
 			m=$(($m + 1))
-			n=$(($n + 1))
 		done
 	done
 
